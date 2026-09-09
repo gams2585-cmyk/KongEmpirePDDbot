@@ -1,13 +1,26 @@
 import os,json,time,sqlite3,urllib.request,uuid,logging
 from pathlib import Path
 ROOT=Path(__file__).parent
-CATEGORIES={'picture':'🖼 Picture · Фотографии','illustration':'🎨 Illustration · Иллюстрации','sign1':'🚸 Safety Sign · 1 ответ','sign2':'🚸 Safety Sign · 2 ответа','sentence1':'📝 Sentence · 1 ответ','sentence2':'📝 Sentence · 2 ответа'}
+CATEGORIES={'sentence':'📝 Sentence · Текстовые вопросы','picture':'🖼 Picture · Фотографии','illustration':'🎨 Illustration · Иллюстрации','sign':'🚸 Safety Sign · Дорожные знаки','video':'▶️ Video · Видео'}
+TOTALS={'sentence':97,'picture':100,'illustration':85,'sign':100,'video':35}
+LEGACY={'sign1':('sign',0),'sign2':('sign',99),'sentence2':('sentence',0)}
+def merge_lessons(source):
+ result={k:dict(source.get(k,{})) for k in CATEGORIES}
+ for old,(new,offset) in LEGACY.items():
+  for number,item in source.get(old,{}).items():
+   result[new].setdefault(str(int(number)+offset),item)
+ return result
+
 class Bot:
  def __init__(self,token,admin,dbpath):
   self.token=token;self.admin=int(admin);Path(dbpath).parent.mkdir(parents=True,exist_ok=True)
   self.db=sqlite3.connect(dbpath)
   self.db.executescript('CREATE TABLE IF NOT EXISTS access(uid INTEGER PRIMARY KEY);CREATE TABLE IF NOT EXISTS progress(uid INTEGER PRIMARY KEY,category TEXT,number INTEGER);CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value INTEGER);CREATE TABLE IF NOT EXISTS selection(uid INTEGER PRIMARY KEY,category TEXT);')
-  self.lessons=json.loads((ROOT/'lessons.json').read_text())
+  self.lessons=merge_lessons(json.loads((ROOT/'lessons.json').read_text()))
+  with self.db:
+   for old,(new,offset) in LEGACY.items():
+    self.db.execute('UPDATE progress SET category=?,number=number+? WHERE category=?',(new,offset,old))
+    self.db.execute('UPDATE selection SET category=? WHERE category=?',(new,old))
  def api(self,method,data):
   data=dict(data)
   if method=='sendPhoto' and isinstance(data.get('photo'),Path):
@@ -27,16 +40,16 @@ class Bot:
   if rows:data['reply_markup']={'inline_keyboard':[[{'text':t,'callback_data':d} for t,d in row] for row in rows]}
   return self.api('sendMessage',data)
  def allowed(self,uid):return uid==self.admin or bool(self.db.execute('SELECT 1 FROM access WHERE uid=?',(uid,)).fetchone())
- def menu(self,uid):self.send(uid,'<b>ПДД Корея | Kong Empire</b>\nВыбери раздел. Номера уроков соответствуют вопросам приложения.',[[(v,'cat:'+k)] for k,v in CATEGORIES.items()])
+ def menu(self,uid):self.send(uid,'<b>ПДД Корея | Kong Empire</b>\nВыбери раздел. Сейчас доступен первый урок Picture.',[[(f'{v} · {TOTALS[k]} вопросов','cat:'+k)] for k,v in CATEGORIES.items()])
  def category(self,uid,cat):
   if cat not in CATEGORIES:return
   available=self.lessons.get(cat,{})
-  if not available:return self.send(uid,CATEGORIES[cat]+'\nУроки пока готовятся.',[[('🏠 Главное меню','menu')]])
-  self.send(uid,CATEGORIES[cat],[[('Начать с вопроса 1','q:'+cat+':1')],[('Продолжить обучение','resume:'+cat)],[('🔢 Выбрать номер вопроса','pick:'+cat)],[('🏠 Главное меню','menu')]])
+  if not available:return self.send(uid,CATEGORIES[cat]+f'\nВ разделе будет {TOTALS[cat]} вопросов. Уроки пока готовятся.',[[('🏠 Главное меню','menu')]])
+  self.send(uid,CATEGORIES[cat]+f'\nДобавлено уроков: {len(available)} из {TOTALS[cat]}.',[[('Начать с вопроса 1','q:'+cat+':1')],[('Продолжить обучение','resume:'+cat)],[('🔢 Выбрать номер вопроса','pick:'+cat)],[('🏠 Главное меню','menu')]])
  def lesson(self,uid,cat,n):
   item=self.lessons.get(cat,{}).get(str(n))
   if not item:return self.send(uid,'Этот вопрос ещё не добавлен.',[[('⬅️ К разделу','cat:'+cat)]])
-  self.api('sendPhoto',{'chat_id':uid,'photo':ROOT/item['image'],'caption':f'Picture · Вопрос {n:02d}','protect_content':uid != self.admin})
+  self.api('sendPhoto',{'chat_id':uid,'photo':ROOT/item['image'],'caption':f'{CATEGORIES[cat]} · Вопрос {n:02d}','protect_content':uid != self.admin})
   rows=[];ar=[]
   if str(n-1) in self.lessons[cat]:ar.append(('⬅️ Предыдущий',f'q:{cat}:{n-1}'))
   if str(n+1) in self.lessons[cat]:ar.append(('Следующий ➡️',f'q:{cat}:{n+1}'))
@@ -65,6 +78,9 @@ class Bot:
   data=cb.get('data','') if cb else text
   if data in ('menu','/start','/menu'):return self.menu(uid)
   parts=data.split(':')
+  if len(parts)>1 and parts[1] in LEGACY:
+   cat,offset=LEGACY[parts[1]];parts[1]=cat
+   if len(parts)==3 and parts[0]=='q' and parts[2].isdigit():parts[2]=str(int(parts[2])+offset)
   if len(parts)==2 and parts[1] in CATEGORIES:
    action,cat=parts
    if action=='cat':return self.category(uid,cat)
