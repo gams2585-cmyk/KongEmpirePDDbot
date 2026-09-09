@@ -23,7 +23,7 @@ class Bot:
   if not result.get('ok'):raise RuntimeError('Telegram request failed')
   return result['result']
  def send(self,uid,text,rows=None):
-  data={'chat_id':uid,'text':text,'parse_mode':'HTML','protect_content':True}
+  data={'chat_id':uid,'text':text,'parse_mode':'HTML','protect_content':uid != self.admin}
   if rows:data['reply_markup']={'inline_keyboard':[[{'text':t,'callback_data':d} for t,d in row] for row in rows]}
   return self.api('sendMessage',data)
  def allowed(self,uid):return uid==self.admin or bool(self.db.execute('SELECT 1 FROM access WHERE uid=?',(uid,)).fetchone())
@@ -36,7 +36,7 @@ class Bot:
  def lesson(self,uid,cat,n):
   item=self.lessons.get(cat,{}).get(str(n))
   if not item:return self.send(uid,'Этот вопрос ещё не добавлен.',[[('⬅️ К разделу','cat:'+cat)]])
-  self.api('sendPhoto',{'chat_id':uid,'photo':ROOT/item['image'],'caption':f'Picture · Вопрос {n:02d}','protect_content':True})
+  self.api('sendPhoto',{'chat_id':uid,'photo':ROOT/item['image'],'caption':f'Picture · Вопрос {n:02d}','protect_content':uid != self.admin})
   rows=[];ar=[]
   if str(n-1) in self.lessons[cat]:ar.append(('⬅️ Предыдущий',f'q:{cat}:{n-1}'))
   if str(n+1) in self.lessons[cat]:ar.append(('Следующий ➡️',f'q:{cat}:{n+1}'))
